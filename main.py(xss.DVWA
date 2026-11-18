@@ -1,0 +1,86 @@
+
+"""Command-line entry point for the SQL injection scanner."""
+import argparse
+import sys
+
+import config
+from sqli_scanner import SQLiScanner
+
+
+def _force_utf8():
+    """Emit UTF-8 so non-ASCII data from the target renders in UTF-8 terminals."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="SQL injection scanner for GET parameters (DVWA-style targets)."
+    )
+    parser.add_argument(
+        "-t", "--target", default=config.DEFAULT_TARGET,
+        help="Target URL (default: %(default)s)",
+    )
+    parser.add_argument(
+        "-c", "--cookie", default=config.DEFAULT_COOKIE,
+        help="Session cookie string (default: %(default)s)",
+    )
+    parser.add_argument(
+        "-p", "--param", default=None,
+        help="Only test this parameter (default: all parameters)",
+    )
+    parser.add_argument(
+        "--no-enumerate", action="store_true",
+        help="Stop after detection; do not enumerate data",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Print every request/response",
+    )
+    return parser.parse_args()
+
+
+def main():
+    _force_utf8()
+    args = parse_args()
+    scanner = SQLiScanner(args.target, cookie=args.cookie, verbose=args.verbose)
+
+    print("[*] SQL injection scanner")
+    print(f"[*] Target : {args.target}")
+    print(f"[*] Cookie : {args.cookie}")
+    print(f"[*] Params : {list(scanner.params)}")
+
+    scanner.check_session()
+
+    params_to_test = [args.param] if args.param else None
+    findings = scanner.detect(params_to_test)
+
+    if not findings:
+        print("\n[-] No SQL injection vulnerability detected.")
+        return 1
+
+    print("\n[+] Summary of detected vulnerabilities:")
+    for f in findings:
+        columns = f.get("columns")
+        extra = f" ({columns} columns)" if columns else ""
+        print(f"  - {f['param']}: {f['type']}{extra}")
+
+    if args.no_enumerate:
+        return 0
+
+    print("\n[+] Vulnerability found - continuing to enumeration ...")
+    union_params = {f["param"] for f in findings if f["type"] == "union-based"}
+    for f in findings:
+        if f["type"] == "union-based":
+            scanner.enumerate(f["param"])
+        elif f["param"] not in union_params:
+            print(f"[!] {f['param']}' is {f['type']} only; "
+                  f"union enumeration is not available for it.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
